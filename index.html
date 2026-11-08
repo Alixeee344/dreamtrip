@@ -1,970 +1,2480 @@
-<script>
-(() => {
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f3bfd3">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="DreamTrip">
 
-const WORLD_URL =
-"https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_110m_admin_0_countries.geojson";
+<title>DreamTrip</title>
 
-const API_BASE =
-"https://www.geoboundaries.org/api/current/gbOpen";
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 
-const STORE = "dreamtrip_global_v2";
-
-const svg = d3.select("#map");
-
-const loading = document.getElementById("loading");
-const backBtn = document.getElementById("backBtn");
-const mapTitle = document.getElementById("mapTitle");
-const pageTitle = document.getElementById("pageTitle");
-const pageDescription = document.getElementById("pageDescription");
-const message = document.getElementById("message");
-
-const stat1Label = document.getElementById("stat1Label");
-const stat2Label = document.getElementById("stat2Label");
-const stat1 = document.getElementById("stat1");
-const stat2 = document.getElementById("stat2");
-
-const progressLabel = document.getElementById("progressLabel");
-const progressText = document.getElementById("progressText");
-const progressFill = document.getElementById("progressFill");
-
-const unitPanel = document.getElementById("unitPanel");
-const unitTitle = document.getElementById("unitTitle");
-const unitList = document.getElementById("unitList");
-
-let state = loadState();
-
-let worldFeatures = [];
-let currentCountry = null;
-let currentGeo = null;
-let currentUnits = [];
-let currentZoom = null;
-
-const countryCache = new Map();
-
-/* SALVATAGGIO */
-
-function loadState() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORE) || "{}");
-
-    return {
-      countries: saved.countries || {},
-      wholeTerritories: saved.wholeTerritories || {}
-    };
-  } catch (e) {
-    return {
-      countries: {},
-      wholeTerritories: {}
-    };
-  }
+<style>
+:root{
+  --pink:#f3bfd3;
+  --pink-soft:#fff1f6;
+  --rose:#b75f87;
+  --rose-dark:#914364;
+  --land:#eee7eb;
+  --sea:#dff2f7;
+  --text:#553b4a;
+  --muted:#947887;
+  --line:#ead6e0;
+  --shadow:0 12px 35px rgba(116,68,92,.12);
 }
 
-function saveState() {
-  localStorage.setItem(STORE, JSON.stringify(state));
+*{
+  box-sizing:border-box;
 }
 
-/* CODICE ISO */
-
-function cleanCode(value) {
-  if (typeof value !== "string") return null;
-
-  const code = value.toUpperCase().trim();
-
-  if (/^[A-Z]{3}$/.test(code) && code !== "-99") {
-    return code;
-  }
-
-  return null;
+html,
+body{
+  margin:0;
+  padding:0;
 }
 
-function iso3(feature) {
-  const p = feature.properties || {};
-
-  return (
-    cleanCode(p.ISO_A3_EH) ||
-    cleanCode(p.ISO_A3) ||
-    cleanCode(p.ADM0_A3) ||
-    cleanCode(p.SOV_A3) ||
-    cleanCode(p.WB_A3) ||
-    null
-  );
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:linear-gradient(#fff7fb,#fff);
+  color:var(--text);
 }
 
-/* NOMI */
-
-function countryName(feature) {
-  const p = feature.properties || {};
-
-  return (
-    p.NAME_IT ||
-    p.NAME_LONG ||
-    p.NAME ||
-    p.ADMIN ||
-    "Territorio"
-  );
+button{
+  font:inherit;
 }
 
-function countryId(feature, index = 0) {
-  const code = iso3(feature);
-
-  if (code) return code;
-
-  const p = feature.properties || {};
-
-  return (
-    "territory_" +
-    String(
-      p.NAME ||
-      p.ADMIN ||
-      index
-    )
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-  );
+.app{
+  max-width:760px;
+  margin:auto;
+  padding:20px 14px 50px;
 }
 
-/* AREE INTERNE */
+/* HEADER */
 
-function unitKey(feature, index) {
-  const p = feature.properties || {};
-
-  return String(
-    p.shapeID ||
-    p.shapeISO ||
-    p.shapeName ||
-    p.NAME_1 ||
-    p.name ||
-    index
-  );
+.header{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  margin-bottom:24px;
 }
 
-function unitName(feature, index) {
-  const p = feature.properties || {};
-
-  return String(
-    p.shapeName ||
-    p.NAME_1 ||
-    p.name ||
-    p.NAME ||
-    ("Area " + (index + 1))
-  );
+.logo{
+  width:58px;
+  height:58px;
+  border-radius:19px;
+  background:linear-gradient(145deg,#f7c9dc,#edaac7);
+  display:grid;
+  place-items:center;
+  font-size:31px;
+  box-shadow:var(--shadow);
 }
 
-/* DATI PAESE */
-
-function countryRecord(code, name) {
-  if (!state.countries[code]) {
-    state.countries[code] = {
-      name: name,
-      visited: [],
-      total: 0,
-      level: null
-    };
-  }
-
-  const record = state.countries[code];
-
-  if (!Array.isArray(record.visited)) {
-    record.visited = [];
-  }
-
-  record.name = name;
-
-  return record;
+h1{
+  margin:0;
+  font-size:28px;
 }
 
-/* MONDO */
-
-function worldTotal() {
-  return worldFeatures.length;
+.header p{
+  margin:3px 0 0;
+  color:var(--muted);
+  font-size:13px;
 }
 
-function isFeatureVisited(feature, index) {
-  const code = iso3(feature);
-
-  if (code) {
-    const record = state.countries[code];
-
-    return !!(
-      record &&
-      Array.isArray(record.visited) &&
-      record.visited.length
-    );
-  }
-
-  const id = countryId(feature, index);
-
-  return !!state.wholeTerritories[id];
+.eyebrow{
+  color:var(--rose);
+  font-weight:800;
+  font-size:12px;
+  letter-spacing:.16em;
+  text-transform:uppercase;
+  margin-bottom:8px;
 }
 
-function visitedCountryCount() {
-  return worldFeatures.filter((feature, index) =>
-    isFeatureVisited(feature, index)
-  ).length;
+h2{
+  font-size:35px;
+  line-height:1.05;
+  margin:0 0 8px;
 }
 
-function worldPct() {
-  const total = worldTotal();
-
-  if (!total) return 0;
-
-  return Math.round(
-    (visitedCountryCount() / total) * 100
-  );
+.description{
+  color:var(--muted);
+  line-height:1.5;
+  margin:0 0 18px;
 }
 
-/* PERCENTUALE PAESE */
+/* MAPPA */
 
-function countryPct(code) {
-  const record = state.countries[code];
-
-  if (
-    !record ||
-    !record.visited ||
-    !record.visited.length
-  ) {
-    return 0;
-  }
-
-  if (!record.total) return 1;
-
-  return Math.round(
-    (record.visited.length / record.total) * 100
-  );
+.card{
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:25px;
+  padding:14px;
+  box-shadow:var(--shadow);
 }
 
-function colorForFeature(feature, index) {
-  const code = iso3(feature);
-
-  let pct = 0;
-
-  if (code) {
-    pct = countryPct(code);
-  } else {
-    const id = countryId(feature, index);
-
-    pct = state.wholeTerritories[id]
-      ? 100
-      : 0;
-  }
-
-  if (!pct) return "#eee7eb";
-
-  return d3.interpolateRgb(
-    "#f4c9da",
-    "#b94d7b"
-  )(Math.max(0.22, pct / 100));
+.topline{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:12px;
 }
 
-/* MESSAGGI */
-
-function showMessage(text) {
-  message.textContent = text;
+.maptitle{
+  font-size:20px;
+  font-weight:800;
 }
 
-/* STATISTICHE MONDO */
-
-function updateWorldStats() {
-  const total = worldTotal();
-  const visited = visitedCountryCount();
-  const pct = worldPct();
-
-  stat1Label.textContent = "Paesi/territori visitati";
-  stat2Label.textContent = "Mondo visitato";
-
-  stat1.textContent = visited + " / " + total;
-  stat2.textContent = pct + "%";
-
-  progressLabel.textContent = "Esplorazione del mondo";
-  progressText.textContent = pct + "%";
-  progressFill.style.width = pct + "%";
+.back{
+  display:none;
+  min-height:42px;
+  border:0;
+  border-radius:14px;
+  background:var(--pink-soft);
+  color:var(--rose-dark);
+  font-weight:800;
+  padding:9px 13px;
 }
 
-/* STATISTICHE PAESE */
+.mapwrap{
+  position:relative;
+  overflow:hidden;
+  border-radius:20px;
+  background:var(--sea);
+  border:1px solid #d4e8ed;
+}
 
-function updateCountryStats() {
-  if (!currentCountry) return;
+.loading{
+  padding:48px 10px;
+  text-align:center;
+  color:var(--muted);
+}
 
-  if (!currentCountry.code) {
-    const selected =
-      !!state.wholeTerritories[currentCountry.id];
+#map{
+  display:block;
+  width:100%;
+  height:auto;
+  background:var(--sea);
 
-    stat1Label.textContent = "Territorio visitato";
-    stat2Label.textContent =
-      currentCountry.name + " visitato";
+  /* zoom con le dita */
+  touch-action:none;
 
-    stat1.textContent = selected ? "Sì" : "No";
-    stat2.textContent = selected ? "100%" : "0%";
+  user-select:none;
+  -webkit-user-select:none;
+}
 
-    progressLabel.textContent =
-      "Esplorazione di " + currentCountry.name;
+/* PAESI / REGIONI */
 
-    progressText.textContent =
-      selected ? "100%" : "0%";
+.country,
+.unit{
+  stroke:#fff;
+  cursor:pointer;
+}
 
-    progressFill.style.width =
-      selected ? "100%" : "0%";
+.country{
+  fill:var(--land);
+  stroke-width:.55;
+}
 
-    return;
-  }
+.unit{
+  fill:#f4e9ee;
+  stroke-width:1.7;
+}
 
-  const record = countryRecord(
-    currentCountry.code,
-    currentCountry.name
-  );
+.country:active,
+.unit:active{
+  opacity:.78;
+}
 
-  const total =
-    record.total ||
-    currentUnits.length ||
-    1;
+/* NOMI SULLA MAPPA */
 
-  const visited = record.visited.length;
+.label{
+  pointer-events:none;
+  text-anchor:middle;
+  font-size:12px;
+  font-weight:800;
+  fill:#5f4051;
 
-  const pct = Math.round(
-    (visited / total) * 100
-  );
-
-  stat1Label.textContent = "Aree visitate";
-  stat2Label.textContent =
-    currentCountry.name + " visitato";
-
-  stat1.textContent =
-    visited + " / " + total;
-
-  stat2.textContent =
-    pct + "%";
-
-  progressLabel.textContent =
-    "Esplorazione di " +
-    currentCountry.name;
-
-  progressText.textContent =
-    pct + "%";
-
-  progressFill.style.width =
-    pct + "%";
+  paint-order:stroke;
+  stroke:#fff;
+  stroke-width:4px;
+  stroke-linejoin:round;
 }
 
 /* ZOOM */
 
-function setupZoom(layer, width, height, maxZoom) {
-  const zoom = d3.zoom()
-    .scaleExtent([1, maxZoom])
-    .extent([
-      [0, 0],
-      [width, height]
-    ])
-    .translateExtent([
-      [-width * 0.7, -height * 0.7],
-      [width * 1.7, height * 1.7]
-    ])
-    .on("zoom", event => {
-      layer.attr(
-        "transform",
-        event.transform
-      );
-    });
-
-  svg.call(zoom);
-
-  svg.call(
-    zoom.transform,
-    d3.zoomIdentity
-  );
-
-  currentZoom = zoom;
+.zoom{
+  position:absolute;
+  right:9px;
+  top:9px;
+  display:grid;
+  gap:7px;
 }
 
-document
-.getElementById("zin")
-.addEventListener("click", () => {
-  if (!currentZoom) return;
+.zoom button{
+  width:42px;
+  height:42px;
+  border:0;
+  border-radius:13px;
+  background:rgba(255,255,255,.95);
+  color:var(--rose-dark);
+  font-size:21px;
+  font-weight:800;
 
-  svg
-    .transition()
-    .duration(150)
-    .call(
-      currentZoom.scaleBy,
-      1.45
-    );
-});
-
-document
-.getElementById("zout")
-.addEventListener("click", () => {
-  if (!currentZoom) return;
-
-  svg
-    .transition()
-    .duration(150)
-    .call(
-      currentZoom.scaleBy,
-      1 / 1.45
-    );
-});
-
-document
-.getElementById("zreset")
-.addEventListener("click", () => {
-  if (!currentZoom) return;
-
-  svg
-    .transition()
-    .duration(180)
-    .call(
-      currentZoom.transform,
-      d3.zoomIdentity
-    );
-});
-
-/* CARICA MONDO */
-
-async function loadWorld() {
-  currentCountry = null;
-  currentGeo = null;
-  currentUnits = [];
-
-  unitPanel.classList.remove("show");
-
-  backBtn.style.display = "none";
-
-  pageTitle.textContent =
-    "Il mio mondo";
-
-  pageDescription.textContent =
-    "Tocca qualsiasi Paese o territorio per esplorarlo.";
-
-  mapTitle.textContent =
-    "🌎 Mondo";
-
-  showMessage(
-    "Tocca un Paese per iniziare 🌍"
-  );
-
-  loading.style.display =
-    "block";
-
-  svg.style(
-    "display",
-    "none"
-  );
-
-  try {
-    if (!worldFeatures.length) {
-      const geo =
-        await d3.json(WORLD_URL);
-
-      worldFeatures =
-        geo.features.filter(feature => {
-          const name =
-            countryName(feature);
-
-          return name !== "Antarctica";
-        });
-    }
-
-    loading.style.display =
-      "none";
-
-    svg.style(
-      "display",
-      "block"
-    );
-
-    renderWorld();
-    updateWorldStats();
-
-  } catch (error) {
-    console.error(error);
-
-    loading.textContent =
-      "Non riesco a caricare la mappa mondiale.";
-  }
+  box-shadow:
+    0 6px 18px
+    rgba(72,40,56,.15);
 }
 
-/* DISEGNA MONDO */
-
-function renderWorld() {
-  svg.selectAll("*").remove();
-
-  svg.attr(
-    "viewBox",
-    "0 0 1000 560"
-  );
-
-  const projection =
-    d3.geoNaturalEarth1()
-      .fitExtent(
-        [
-          [8, 8],
-          [992, 552]
-        ],
-        {
-          type: "FeatureCollection",
-          features: worldFeatures
-        }
-      );
-
-  const path =
-    d3.geoPath(projection);
-
-  const layer =
-    svg.append("g");
-
-  setupZoom(
-    layer,
-    1000,
-    560,
-    11
-  );
-
-  layer
-    .selectAll("path")
-    .data(worldFeatures)
-    .join("path")
-    .attr("d", path)
-    .attr(
-      "class",
-      "country"
-    )
-    .style(
-      "fill",
-      (feature, index) =>
-        colorForFeature(
-          feature,
-          index
-        )
-    )
-    .on(
-      "click",
-      (event, feature) => {
-
-        if (event.defaultPrevented) {
-          return;
-        }
-
-        openCountry(feature);
-      }
-    );
+.zoom button:last-child{
+  font-size:17px;
 }
 
-/* APRE PAESE */
+/* MESSAGGIO */
 
-async function openCountry(feature) {
-  const name =
-    countryName(feature);
+.message{
+  min-height:48px;
+  margin-top:12px;
+  padding:12px 14px;
+  border-radius:16px;
+  background:var(--pink-soft);
+  color:var(--rose-dark);
+  font-size:14px;
+  line-height:1.4;
+}
 
-  const code =
-    iso3(feature);
+/* STATISTICHE */
 
-  const id =
-    countryId(feature);
+.stats{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:11px;
+  margin-top:15px;
+}
 
-  currentCountry = {
-    feature,
-    code,
-    id,
-    name
-  };
+.stat{
+  padding:15px;
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:19px;
 
-  pageTitle.textContent =
-    name;
+  box-shadow:
+    0 8px 22px
+    rgba(120,75,95,.07);
+}
 
-  pageDescription.textContent =
-    code
-      ? "Tocca le aree interne che hai visitato."
-      : "Questo territorio non ha suddivisioni compatibili: puoi comunque segnarlo interamente come visitato.";
+.stat small{
+  color:var(--muted);
+}
 
-  mapTitle.textContent =
-    "📍 " + name;
+.stat strong{
+  display:block;
+  margin-top:5px;
+  font-size:24px;
+}
 
-  backBtn.style.display =
-    "block";
+/* BARRA PERCENTUALE */
 
-  unitPanel.classList.remove(
-    "show"
-  );
+.progressCard{
+  margin-top:13px;
+  padding:16px;
+  background:#fff;
+  border:1px solid var(--line);
+  border-radius:20px;
+}
 
-  if (!code) {
-    showWholeTerritory(feature);
-    return;
+.progressTop{
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:10px;
+  font-size:14px;
+  font-weight:800;
+}
+
+.progress{
+  height:13px;
+  border-radius:99px;
+  overflow:hidden;
+  background:#f3e7ed;
+}
+
+.progressFill{
+  height:100%;
+  width:0;
+  border-radius:99px;
+
+  background:
+    linear-gradient(
+      90deg,
+      #efa8c6,
+      #ce6b96
+    );
+
+  transition:width .25s;
+}
+
+/* LISTA REGIONI / STATI */
+
+.unitPanel{
+  display:none;
+  margin-top:16px;
+}
+
+.unitPanel.show{
+  display:block;
+}
+
+.unitPanel h3{
+  margin:0 0 6px;
+}
+
+.unitPanel p{
+  margin:0 0 10px;
+  color:var(--muted);
+  font-size:13px;
+}
+
+.unitList{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:8px;
+}
+
+.unitBtn{
+  min-height:44px;
+  border:1px solid var(--line);
+  border-radius:13px;
+  background:#fff;
+  color:var(--text);
+  padding:9px 10px;
+  text-align:left;
+}
+
+.unitBtn.visited{
+  background:#d979a3;
+  color:#fff;
+  border-color:#d979a3;
+  font-weight:800;
+}
+
+.info{
+  margin-top:20px;
+  color:var(--muted);
+  line-height:1.55;
+  font-size:13px;
+}
+
+.attribution{
+  margin-top:18px;
+  color:var(--muted);
+  font-size:11px;
+  line-height:1.45;
+}
+
+@media(max-width:390px){
+
+  h2{
+    font-size:30px;
   }
 
-  showMessage(
-    "Caricamento delle aree di " +
-    name +
-    "…"
-  );
-
-  loading.style.display =
-    "block";
-
-  svg.style(
-    "display",
-    "none"
-  );
-
-  try {
-    let pack =
-      countryCache.get(code);
-
-    if (!pack) {
-      pack =
-        await fetchCountryUnits(
-          code
-        );
-
-      countryCache.set(
-        code,
-        pack
-      );
-    }
-
-    currentGeo =
-      pack.geo;
-
-    currentUnits =
-      pack.units;
-
-    const record =
-      countryRecord(
-        code,
-        name
-      );
-
-    record.total =
-      currentUnits.length;
-
-    record.level =
-      pack.level;
-
-    saveState();
-
-    loading.style.display =
-      "none";
-
-    svg.style(
-      "display",
-      "block"
-    );
-
-    renderCountry();
-    renderUnitList();
-    updateCountryStats();
-
-  } catch (error) {
-    console.error(error);
-
-    showWholeTerritory(feature);
-  }
-}
-
-/* TERRITORIO INTERO */
-
-function showWholeTerritory(feature) {
-  loading.style.display =
-    "none";
-
-  svg.style(
-    "display",
-    "block"
-  );
-
-  currentGeo = {
-    type: "FeatureCollection",
-    features: [feature]
-  };
-
-  currentUnits = [];
-
-  svg.selectAll("*").remove();
-
-  svg.attr(
-    "viewBox",
-    "0 0 900 700"
-  );
-
-  const projection =
-    d3.geoMercator()
-      .fitExtent(
-        [
-          [60, 50],
-          [840, 650]
-        ],
-        currentGeo
-      );
-
-  const path =
-    d3.geoPath(projection);
-
-  const layer =
-    svg.append("g");
-
-  setupZoom(
-    layer,
-    900,
-    700,
-    12
-  );
-
-  const selected =
-    !!state.wholeTerritories[
-      currentCountry.id
-    ];
-
-  layer
-    .append("path")
-    .datum(feature)
-    .attr("d", path)
-    .attr("class", "unit")
-    .style(
-      "fill",
-      selected
-        ? "#d979a3"
-        : "#f4e9ee"
-    )
-    .on("click", () => {
-      toggleWholeTerritory();
-    });
-
-  unitPanel.classList.add(
-    "show"
-  );
-
-  unitTitle.textContent =
-    currentCountry.name;
-
-  unitList.innerHTML = "";
-
-  const button =
-    document.createElement(
-      "button"
-    );
-
-  button.type = "button";
-
-  button.className =
-    "unitBtn" +
-    (selected ? " visited" : "");
-
-  button.textContent =
-    selected
-      ? "✓ Segnato come visitato"
-      : "Segna come visitato";
-
-  button.addEventListener(
-    "click",
-    toggleWholeTerritory
-  );
-
-  unitList.appendChild(
-    button
-  );
-
-  updateCountryStats();
-
-  showMessage(
-    "Puoi comunque colorare tutto questo territorio."
-  );
-}
-
-function toggleWholeTerritory() {
-  const id =
-    currentCountry.id;
-
-  if (
-    state.wholeTerritories[id]
-  ) {
-    delete state.wholeTerritories[id];
-
-    showMessage(
-      currentCountry.name +
-      " rimosso dai luoghi visitati."
-    );
-  } else {
-    state.wholeTerritories[id] =
-      true;
-
-    showMessage(
-      "✨ Hai visitato " +
-      currentCountry.name +
-      "!"
-    );
+  .header h1{
+    font-size:24px;
   }
 
-  saveState();
+  .app{
+    padding-left:11px;
+    padding-right:11px;
+  }
 
-  showWholeTerritory(
-    currentCountry.feature
-  );
+  .unitList{
+    grid-template-columns:1fr;
+  }
+
+  .label{
+    font-size:10px;
+  }
 }
+</style>
+</head>
 
-/* CARICA SUDDIVISIONI */
+<body>
 
-async function fetchCountryUnits(code) {
-  const levels =
-    code === "ITA"
-      ? ["ADM1", "ADM2"]
-      : ["ADM1", "ADM2"];
+<div class="app">
 
-  for (const level of levels) {
-    try {
-      const meta =
-        await d3.json(
-          API_BASE +
-          "/" +
-          code +
-          "/" +
-          level +
-          "/"
-        );
+  <header class="header">
 
-      if (
-        !meta ||
-        !meta.simplifiedGeometryGeoJSON
-      ) {
-        continue;
-      }
+    <div class="logo">
+      🌍
+    </div>
 
-      const geo =
-        await d3.json(
-          meta.simplifiedGeometryGeoJSON
-        );
+    <div>
 
-      if (
-        !geo ||
-        !Array.isArray(
-          geo.features
-        ) ||
-        !geo.features.length
-      ) {
-        continue;
-      }
+      <h1>
+        DreamTrip
+      </h1>
 
-      const units =
-        geo.features.map(
-          (feature, index) => ({
-            feature,
-            key: unitKey(
-              feature,
-              index
-            ),
-            name: unitName(
-              feature,
-              index
-            )
-          })
+      <p>
+        Colora il mondo con i tuoi viaggi ♡
+      </p>
+
+    </div>
+
+  </header>
+
+  <div class="eyebrow">
+    La mia mappa
+  </div>
+
+  <h2 id="pageTitle">
+    Il mio mondo
+  </h2>
+
+  <p
+    class="description"
+    id="pageDescription"
+  >
+    Tocca qualsiasi Paese.
+    Poi colora le sue aree interne
+    che hai visitato.
+  </p>
+
+  <div class="card">
+
+    <div class="topline">
+
+      <div
+        class="maptitle"
+        id="mapTitle"
+      >
+        🌎 Mondo
+      </div>
+
+      <button
+        class="back"
+        id="backBtn"
+        type="button"
+      >
+        ← Mondo
+      </button>
+
+    </div>
+
+    <div class="mapwrap">
+
+      <div
+        class="loading"
+        id="loading"
+      >
+        Caricamento cartina…
+      </div>
+
+      <svg
+        id="map"
+        viewBox="0 0 1000 560"
+        aria-label="Mappa interattiva"
+      ></svg>
+
+      <div class="zoom">
+
+        <button
+          id="zin"
+          type="button"
+          aria-label="Ingrandisci"
+        >
+          +
+        </button>
+
+        <button
+          id="zout"
+          type="button"
+          aria-label="Rimpicciolisci"
+        >
+          −
+        </button>
+
+        <button
+          id="zreset"
+          type="button"
+          aria-label="Ripristina zoom"
+        >
+          ⟳
+        </button>
+
+      </div>
+
+    </div>
+
+    <div
+      class="message"
+      id="message"
+    >
+      Tocca un Paese per iniziare 🌍
+    </div>
+
+  </div>
+
+  <!-- PERCENTUALE -->
+
+  <div class="stats">
+
+    <div class="stat">
+
+      <small id="stat1Label">
+        Paesi/territori visitati
+      </small>
+
+      <strong id="stat1">
+        0
+      </strong>
+
+    </div>
+
+    <div class="stat">
+
+      <small id="stat2Label">
+        Mondo visitato
+      </small>
+
+      <strong id="stat2">
+        0%
+      </strong>
+
+    </div>
+
+  </div>
+
+  <div class="progressCard">
+
+    <div class="progressTop">
+
+      <span id="progressLabel">
+        Esplorazione del mondo
+      </span>
+
+      <span id="progressText">
+        0%
+      </span>
+
+    </div>
+
+    <div class="progress">
+
+      <div
+        class="progressFill"
+        id="progressFill"
+      ></div>
+
+    </div>
+
+  </div>
+
+  <!-- LISTA AREE -->
+
+  <div
+    class="unitPanel"
+    id="unitPanel"
+  >
+
+    <h3 id="unitTitle">
+      Aree visitate
+    </h3>
+
+    <p>
+      Tocca anche qui se un'area è
+      troppo piccola sulla mappa.
+    </p>
+
+    <div
+      class="unitList"
+      id="unitList"
+    ></div>
+
+  </div>
+
+  <p class="info">
+
+    Puoi ingrandire e trascinare
+    sia la mappa mondiale sia quella
+    del singolo Paese.
+
+    Un Paese si colora appena segni
+    almeno una sua area come visitata.
+
+    Più alta è la percentuale
+    del Paese, più intenso diventa
+    il rosa.
+
+  </p>
+
+  <p class="attribution">
+
+    Confini mondiali: Natural Earth.
+    Suddivisioni amministrative:
+    geoBoundaries gbOpen.
+
+  </p>
+
+</div>
+
+<script>
+(() => {
+
+  /* ============================
+     DATI
+  ============================ */
+
+  const WORLD_URL =
+    "https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_110m_admin_0_countries.geojson";
+
+  const API_BASE =
+    "https://www.geoboundaries.org/api/current/gbOpen";
+
+  const STORE =
+    "dreamtrip_global_v3";
+
+
+  /* ============================
+     ELEMENTI
+  ============================ */
+
+  const svg =
+    d3.select("#map");
+
+  const loading =
+    document.getElementById("loading");
+
+  const backBtn =
+    document.getElementById("backBtn");
+
+  const mapTitle =
+    document.getElementById("mapTitle");
+
+  const pageTitle =
+    document.getElementById("pageTitle");
+
+  const pageDescription =
+    document.getElementById(
+      "pageDescription"
+    );
+
+  const message =
+    document.getElementById("message");
+
+  const stat1Label =
+    document.getElementById(
+      "stat1Label"
+    );
+
+  const stat2Label =
+    document.getElementById(
+      "stat2Label"
+    );
+
+  const stat1 =
+    document.getElementById("stat1");
+
+  const stat2 =
+    document.getElementById("stat2");
+
+  const progressLabel =
+    document.getElementById(
+      "progressLabel"
+    );
+
+  const progressText =
+    document.getElementById(
+      "progressText"
+    );
+
+  const progressFill =
+    document.getElementById(
+      "progressFill"
+    );
+
+  const unitPanel =
+    document.getElementById(
+      "unitPanel"
+    );
+
+  const unitTitle =
+    document.getElementById(
+      "unitTitle"
+    );
+
+  const unitList =
+    document.getElementById(
+      "unitList"
+    );
+
+
+  /* ============================
+     STATO
+  ============================ */
+
+  let state =
+    loadState();
+
+  let worldFeatures = [];
+
+  let currentCountry = null;
+
+  let currentGeo = null;
+
+  let currentUnits = [];
+
+  let currentZoom = null;
+
+  const countryCache =
+    new Map();
+
+
+  /* ============================
+     SALVATAGGIO
+  ============================ */
+
+  function loadState(){
+
+    try{
+
+      const saved =
+        JSON.parse(
+          localStorage.getItem(
+            STORE
+          ) || "{}"
         );
 
       return {
-        geo,
-        units,
-        level
+
+        countries:
+          saved.countries || {},
+
+        wholeTerritories:
+          saved.wholeTerritories || {}
+
       };
 
-    } catch (error) {
-      console.warn(
-        code,
-        level,
-        error
-      );
     }
+    catch(error){
+
+      return {
+
+        countries:{},
+
+        wholeTerritories:{}
+
+      };
+
+    }
+
   }
 
-  throw new Error(
-    "Nessuna suddivisione disponibile"
-  );
-}
 
-/* DISEGNA PAESE */
+  function saveState(){
 
-function renderCountry() {
-  svg.selectAll("*").remove();
+    localStorage.setItem(
 
-  svg.attr(
-    "viewBox",
-    "0 0 900 760"
-  );
+      STORE,
 
-  const projection =
-    d3.geoMercator()
-      .fitExtent(
-        [
-          [45, 35],
-          [855, 725]
-        ],
-        currentGeo
-      );
+      JSON.stringify(
+        state
+      )
 
-  const path =
-    d3.geoPath(projection);
-
-  const layer =
-    svg.append("g");
-
-  setupZoom(
-    layer,
-    900,
-    760,
-    14
-  );
-
-  const record =
-    countryRecord(
-      currentCountry.code,
-      currentCountry.name
     );
 
-  layer
-    .selectAll("path")
-    .data(currentUnits)
-    .join("path")
-    .attr(
-      "d",
-      unit =>
-        path(unit.feature)
-    )
-    .attr(
-      "class",
-      "unit"
-    )
-    .style(
-      "fill",
-      unit =>
-        record.visited.includes(
-          unit.key
-        )
-          ? "#d979a3"
-          : "#f4e9ee"
-    )
-    .on(
-      "click",
-      (event, unit) => {
+  }
 
-        if (
-          event.defaultPrevented
-        ) {
+
+  /* ============================
+     CODICE ISO DEL PAESE
+  ============================ */
+
+  function cleanCode(value){
+
+    if(
+      typeof value !== "string"
+    ){
+
+      return null;
+
+    }
+
+    const code =
+      value
+      .toUpperCase()
+      .trim();
+
+    if(
+      !/^[A-Z]{3}$/.test(code)
+    ){
+
+      return null;
+
+    }
+
+    if(
+      code === "-99"
+    ){
+
+      return null;
+
+    }
+
+    return code;
+
+  }
+
+
+  function iso3(feature){
+
+    const p =
+      feature.properties || {};
+
+    return (
+
+      cleanCode(
+        p.ISO_A3_EH
+      )
+
+      ||
+
+      cleanCode(
+        p.ISO_A3
+      )
+
+      ||
+
+      cleanCode(
+        p.ADM0_A3
+      )
+
+      ||
+
+      cleanCode(
+        p.SOV_A3
+      )
+
+      ||
+
+      cleanCode(
+        p.WB_A3
+      )
+
+      ||
+
+      null
+
+    );
+
+  }
+
+
+  /* ============================
+     NOMI
+  ============================ */
+
+  function countryName(feature){
+
+    const p =
+      feature.properties || {};
+
+    return (
+
+      p.NAME_LONG
+
+      ||
+
+      p.NAME
+
+      ||
+
+      p.ADMIN
+
+      ||
+
+      p.SOVEREIGNT
+
+      ||
+
+      "Territorio"
+
+    );
+
+  }
+
+
+  /* se non esiste codice ISO */
+
+  function countryId(
+    feature,
+    index = 0
+  ){
+
+    const code =
+      iso3(feature);
+
+    if(code){
+
+      return code;
+
+    }
+
+    const p =
+      feature.properties || {};
+
+    const raw =
+      String(
+        p.NAME
+        ||
+        p.ADMIN
+        ||
+        p.SOVEREIGNT
+        ||
+        index
+      )
+      .toLowerCase();
+
+    return (
+      "territory_"
+      +
+      raw
+      .replace(
+        /[^a-z0-9]+/g,
+        "_"
+      )
+      .replace(
+        /^_+|_+$/g,
+        ""
+      )
+    );
+
+  }
+
+
+  /* ============================
+     NOMI REGIONI / STATI
+  ============================ */
+
+  function unitKey(
+    feature,
+    index
+  ){
+
+    const p =
+      feature.properties || {};
+
+    return String(
+
+      p.shapeID
+
+      ||
+
+      p.shapeISO
+
+      ||
+
+      p.shapeName
+
+      ||
+
+      p.NAME_1
+
+      ||
+
+      p.NAME_2
+
+      ||
+
+      p.name
+
+      ||
+
+      p.NAME
+
+      ||
+
+      index
+
+    );
+
+  }
+
+
+  function unitName(
+    feature,
+    index
+  ){
+
+    const p =
+      feature.properties || {};
+
+    return String(
+
+      p.shapeName
+
+      ||
+
+      p.NAME_1
+
+      ||
+
+      p.NAME_2
+
+      ||
+
+      p.name
+
+      ||
+
+      p.NAME
+
+      ||
+
+      (
+        "Area "
+        +
+        (index + 1)
+      )
+
+    );
+
+  }
+
+
+  /* ============================
+     RECORD PAESE
+  ============================ */
+
+  function countryRecord(
+    code,
+    name
+  ){
+
+    if(
+      !state.countries[code]
+    ){
+
+      state.countries[code] = {
+
+        name:name,
+
+        visited:[],
+
+        total:0,
+
+        level:null
+
+      };
+
+    }
+
+    const record =
+      state.countries[code];
+
+    if(
+      !Array.isArray(
+        record.visited
+      )
+    ){
+
+      record.visited = [];
+
+    }
+
+    record.name =
+      name;
+
+    return record;
+
+  }
+
+
+  /* ============================
+     PAESE VISITATO?
+  ============================ */
+
+  function isFeatureVisited(
+    feature,
+    index
+  ){
+
+    const code =
+      iso3(feature);
+
+    if(code){
+
+      const record =
+        state.countries[code];
+
+      return Boolean(
+
+        record
+
+        &&
+
+        Array.isArray(
+          record.visited
+        )
+
+        &&
+
+        record.visited.length > 0
+
+      );
+
+    }
+
+    return Boolean(
+
+      state.wholeTerritories[
+        countryId(
+          feature,
+          index
+        )
+      ]
+
+    );
+
+  }
+
+
+  /* ============================
+     PERCENTUALE MONDO
+  ============================ */
+
+  function worldTotal(){
+
+    return worldFeatures.length;
+
+  }
+
+
+  function visitedCountryCount(){
+
+    return worldFeatures
+      .filter(
+        (
+          feature,
+          index
+        ) =>
+          isFeatureVisited(
+            feature,
+            index
+          )
+      )
+      .length;
+
+  }
+
+
+  function worldPct(){
+
+    const total =
+      worldTotal();
+
+    if(!total){
+
+      return 0;
+
+    }
+
+    return Math.round(
+
+      (
+        visitedCountryCount()
+        /
+        total
+      )
+
+      *
+
+      100
+
+    );
+
+  }
+
+
+  /* ============================
+     PERCENTUALE PAESE
+  ============================ */
+
+  function countryPct(code){
+
+    const record =
+      state.countries[code];
+
+    if(
+      !record
+      ||
+      !record.visited
+      ||
+      !record.visited.length
+    ){
+
+      return 0;
+
+    }
+
+    if(
+      !record.total
+    ){
+
+      return 1;
+
+    }
+
+    return Math.round(
+
+      (
+        record.visited.length
+        /
+        record.total
+      )
+
+      *
+
+      100
+
+    );
+
+  }
+
+
+  /* ============================
+     COLORE MONDO
+  ============================ */
+
+  function colorForFeature(
+    feature,
+    index
+  ){
+
+    const code =
+      iso3(feature);
+
+    let pct = 0;
+
+    if(code){
+
+      pct =
+        countryPct(code);
+
+    }
+    else{
+
+      pct =
+        state.wholeTerritories[
+          countryId(
+            feature,
+            index
+          )
+        ]
+        ?
+        100
+        :
+        0;
+
+    }
+
+    if(!pct){
+
+      return "#eee7eb";
+
+    }
+
+    return d3.interpolateRgb(
+
+      "#f4c9da",
+
+      "#b94d7b"
+
+    )(
+      Math.max(
+        .22,
+        pct / 100
+      )
+    );
+
+  }
+
+
+  /* ============================
+     MESSAGGI
+  ============================ */
+
+  function showMessage(text){
+
+    message.textContent =
+      text;
+
+  }
+
+
+  /* ============================
+     STATS MONDO
+  ============================ */
+
+  function updateWorldStats(){
+
+    const total =
+      worldTotal();
+
+    const visited =
+      visitedCountryCount();
+
+    const pct =
+      worldPct();
+
+    stat1Label.textContent =
+      "Paesi/territori visitati";
+
+    stat2Label.textContent =
+      "Mondo visitato";
+
+    stat1.textContent =
+      visited
+      +
+      " / "
+      +
+      total;
+
+    stat2.textContent =
+      pct
+      +
+      "%";
+
+    progressLabel.textContent =
+      "Esplorazione del mondo";
+
+    progressText.textContent =
+      pct
+      +
+      "%";
+
+    progressFill.style.width =
+      pct
+      +
+      "%";
+
+  }
+
+
+  /* ============================
+     STATS PAESE
+  ============================ */
+
+  function updateCountryStats(){
+
+    if(
+      !currentCountry
+    ){
+
+      return;
+
+    }
+
+    /*
+      TERRITORIO SENZA
+      CODICE ISO
+    */
+
+    if(
+      !currentCountry.code
+    ){
+
+      const selected =
+        Boolean(
+
+          state.wholeTerritories[
+            currentCountry.id
+          ]
+
+        );
+
+      stat1Label.textContent =
+        "Territorio visitato";
+
+      stat2Label.textContent =
+        currentCountry.name
+        +
+        " visitato";
+
+      stat1.textContent =
+        selected
+        ?
+        "Sì"
+        :
+        "No";
+
+      stat2.textContent =
+        selected
+        ?
+        "100%"
+        :
+        "0%";
+
+      progressLabel.textContent =
+        "Esplorazione di "
+        +
+        currentCountry.name;
+
+      progressText.textContent =
+        selected
+        ?
+        "100%"
+        :
+        "0%";
+
+      progressFill.style.width =
+        selected
+        ?
+        "100%"
+        :
+        "0%";
+
+      return;
+
+    }
+
+
+    /*
+      PAESE NORMALE
+    */
+
+    const record =
+      countryRecord(
+
+        currentCountry.code,
+
+        currentCountry.name
+
+      );
+
+    const total =
+
+      record.total
+
+      ||
+
+      currentUnits.length
+
+      ||
+
+      1;
+
+
+    const visited =
+      record.visited.length;
+
+
+    const pct =
+      Math.round(
+
+        (
+          visited
+          /
+          total
+        )
+
+        *
+
+        100
+
+      );
+
+
+    stat1Label.textContent =
+      "Aree visitate";
+
+
+    stat2Label.textContent =
+      currentCountry.name
+      +
+      " visitato";
+
+
+    stat1.textContent =
+      visited
+      +
+      " / "
+      +
+      total;
+
+
+    stat2.textContent =
+      pct
+      +
+      "%";
+
+
+    progressLabel.textContent =
+      "Esplorazione di "
+      +
+      currentCountry.name;
+
+
+    progressText.textContent =
+      pct
+      +
+      "%";
+
+
+    progressFill.style.width =
+      pct
+      +
+      "%";
+
+  }
+
+
+  /* ============================
+     ZOOM
+  ============================ */
+
+  function setupZoom(
+    layer,
+    width,
+    height,
+    maxZoom
+  ){
+
+    const zoom =
+
+      d3.zoom()
+
+      .scaleExtent(
+        [
+          1,
+          maxZoom
+        ]
+      )
+
+      .extent(
+        [
+          [0,0],
+          [width,height]
+        ]
+      )
+
+      .translateExtent(
+        [
+          [
+            -width * .7,
+            -height * .7
+          ],
+          [
+            width * 1.7,
+            height * 1.7
+          ]
+        ]
+      )
+
+      .on(
+        "zoom",
+        event => {
+
+          layer.attr(
+
+            "transform",
+
+            event.transform
+
+          );
+
+        }
+      );
+
+
+    svg.call(
+      zoom
+    );
+
+
+    svg.call(
+
+      zoom.transform,
+
+      d3.zoomIdentity
+
+    );
+
+
+    currentZoom =
+      zoom;
+
+  }
+
+
+  /* + */
+
+  document
+    .getElementById(
+      "zin"
+    )
+    .addEventListener(
+      "click",
+      () => {
+
+        if(
+          !currentZoom
+        ){
+
           return;
+
         }
 
-        toggleUnit(
-          unit.key,
-          unit.name
-        );
+        svg
+          .transition()
+          .duration(150)
+          .call(
+
+            currentZoom.scaleBy,
+
+            1.45
+
+          );
+
       }
     );
 
-  const labels =
-    [...currentUnits]
+
+  /* - */
+
+  document
+    .getElementById(
+      "zout"
+    )
+    .addEventListener(
+      "click",
+      () => {
+
+        if(
+          !currentZoom
+        ){
+
+          return;
+
+        }
+
+        svg
+          .transition()
+          .duration(150)
+          .call(
+
+            currentZoom.scaleBy,
+
+            1 / 1.45
+
+          );
+
+      }
+    );
+
+
+  /* RESET */
+
+  document
+    .getElementById(
+      "zreset"
+    )
+    .addEventListener(
+      "click",
+      () => {
+
+        if(
+          !currentZoom
+        ){
+
+          return;
+
+        }
+
+        svg
+          .transition()
+          .duration(180)
+          .call(
+
+            currentZoom.transform,
+
+            d3.zoomIdentity
+
+          );
+
+      }
+    );
+
+
+  /* ============================
+     CARICA IL MONDO
+  ============================ */
+
+  async function loadWorld(){
+
+    currentCountry =
+      null;
+
+    currentGeo =
+      null;
+
+    currentUnits =
+      [];
+
+
+    unitPanel
+      .classList
+      .remove(
+        "show"
+      );
+
+
+    backBtn.style.display =
+      "none";
+
+
+    pageTitle.textContent =
+      "Il mio mondo";
+
+
+    pageDescription.textContent =
+      "Tocca qualsiasi Paese o territorio per esplorarlo.";
+
+
+    mapTitle.textContent =
+      "🌎 Mondo";
+
+
+    showMessage(
+      "Tocca un Paese per iniziare 🌍"
+    );
+
+
+    loading.style.display =
+      "block";
+
+
+    loading.textContent =
+      "Caricamento cartina…";
+
+
+    svg.style(
+      "display",
+      "none"
+    );
+
+
+    try{
+
+      if(
+        !worldFeatures.length
+      ){
+
+        const geo =
+          await d3.json(
+            WORLD_URL
+          );
+
+
+        worldFeatures =
+          geo.features
+          .filter(
+            feature =>
+
+              countryName(feature)
+              .toLowerCase()
+
+              !==
+
+              "antarctica"
+
+          );
+
+      }
+
+
+      loading.style.display =
+        "none";
+
+
+      svg.style(
+        "display",
+        "block"
+      );
+
+
+      renderWorld();
+
+      updateWorldStats();
+
+    }
+    catch(error){
+
+      console.error(
+        error
+      );
+
+
+      loading.textContent =
+        "Non riesco a caricare la mappa mondiale.";
+
+    }
+
+  }
+
+
+  /* ============================
+     DISEGNA IL MONDO
+  ============================ */
+
+  function renderWorld(){
+
+    svg
+      .selectAll("*")
+      .remove();
+
+
+    svg.attr(
+      "viewBox",
+      "0 0 1000 560"
+    );
+
+
+    const projection =
+
+      d3
+      .geoNaturalEarth1()
+
+      .fitExtent(
+
+        [
+          [8,8],
+          [992,552]
+        ],
+
+        {
+
+          type:
+            "FeatureCollection",
+
+          features:
+            worldFeatures
+
+        }
+
+      );
+
+
+    const path =
+      d3.geoPath(
+        projection
+      );
+
+
+    const layer =
+      svg.append("g");
+
+
+    setupZoom(
+
+      layer,
+
+      1000,
+
+      560,
+
+      11
+
+    );
+
+
+    layer
+      .selectAll("path")
+
+      .data(
+        worldFeatures
+      )
+
+      .join("path")
+
+      .attr(
+        "d",
+        path
+      )
+
+      .attr(
+        "class",
+        "country"
+      )
+
+      .style(
+        "fill",
+        (
+          feature,
+          index
+        ) =>
+
+          colorForFeature(
+
+            feature,
+
+            index
+
+          )
+      )
+
+      .on(
+        "click",
+        (
+          event,
+          feature
+        ) => {
+
+          if(
+            event.defaultPrevented
+          ){
+
+            return;
+
+          }
+
+          openCountry(
+            feature
+          );
+
+        }
+      );
+
+  }
+
+
+  /* ============================
+     APRE UN PAESE
+  ============================ */
+
+  async function openCountry(
+    feature
+  ){
+
+    const name =
+      countryName(
+        feature
+      );
+
+
+    const code =
+      iso3(
+        feature
+      );
+
+
+    const id =
+      countryId(
+        feature
+      );
+
+
+    currentCountry = {
+
+      feature,
+
+      code,
+
+      id,
+
+      name
+
+    };
+
+
+    pageTitle.textContent =
+      name;
+
+
+    pageDescription.textContent =
+
+      code
+
+      ?
+
+      "Tocca le aree interne che hai visitato."
+
+      :
+
+      "Puoi segnare questo territorio interamente come visitato.";
+
+
+    mapTitle.textContent =
+      "📍 "
+      +
+      name;
+
+
+    backBtn.style.display =
+      "block";
+
+
+    unitPanel
+      .classList
+      .remove(
+        "show"
+      );
+
+
+    /*
+      SENZA CODICE ISO
+    */
+
+    if(
+      !code
+    ){
+
+      showWholeTerritory(
+        feature
+      );
+
+      return;
+
+    }
+
+
+    /*
+      CON CODICE ISO
+    */
+
+    showMessage(
+
+      "Caricamento delle aree di "
+      +
+      name
+      +
+      "…"
+
+    );
+
+
+    loading.style.display =
+      "block";
+
+
+    svg.style(
+      "display",
+      "none"
+    );
+
+
+    try{
+
+      let pack =
+        countryCache.get(
+          code
+        );
+
+
+      if(
+        !pack
+      ){
+
+        pack =
+          await fetchCountryUnits(
+            code
+          );
+
+
+        countryCache.set(
+          code,
+          pack
+        );
+
+      }
+
+
+      currentGeo =
+        pack.geo;
+
+
+      currentUnits =
+        pack.units;
+
+
+      const record =
+        countryRecord(
+
+          code,
+
+          name
+
+        );
+
+
+      record.total =
+        currentUnits.length;
+
+
+      record.level =
+        pack.level;
+
+
+      saveState();
+
+
+      loading.style.display =
+        "none";
+
+
+      svg.style(
+        "display",
+        "block"
+      );
+
+
+      renderCountry();
+
+      renderUnitList();
+
+      updateCountryStats();
+
+    }
+    catch(error){
+
+      console.error(
+        error
+      );
+
+
+      /*
+        SE NON TROVA REGIONI,
+        MOSTRA PAESE INTERO
+      */
+
+      showWholeTerritory(
+        feature
+      );
+
+    }
+
+  }
+
+
+  /* ============================
+     CARICA REGIONI / STATI
+  ============================ */
+
+  async function fetchCountryUnits(
+    code
+  ){
+
+    /*
+      ITALIA:
+      ADM2 = 20 regioni
+      in questo dataset.
+
+      ALTRI PAESI:
+      proviamo prima ADM1.
+    */
+
+    const levels =
+
+      code === "ITA"
+
+      ?
+
+      [
+        "ADM2",
+        "ADM1"
+      ]
+
+      :
+
+      [
+        "ADM1",
+        "ADM2"
+      ];
+
+
+    for(
+      const level
+      of
+      levels
+    ){
+
+      try{
+
+        const meta =
+          await d3.json(
+
+            API_BASE
+            +
+            "/"
+            +
+            code
+            +
+            "/"
+            +
+            level
+            +
+            "/"
+
+          );
+
+
+        if(
+          !meta
+          ||
+          !meta.simplifiedGeometryGeoJSON
+        ){
+
+          continue;
+
+        }
+
+
+        const geo =
+          await d3.json(
+
+            meta.simplifiedGeometryGeoJSON
+
+          );
+
+
+        if(
+          !geo
+          ||
+          !Array.isArray(
+            geo.features
+          )
+          ||
+          geo.features.length < 2
+        ){
+
+          continue;
+
+        }
+
+
+        const units =
+
+          geo.features
+          .map(
+            (
+              feature,
+              index
+            ) => ({
+
+              feature,
+
+              key:
+                unitKey(
+                  feature,
+                  index
+                ),
+
+              name:
+                unitName(
+                  feature,
+                  index
+                )
+
+            })
+          );
+
+
+        return {
+
+          geo,
+
+          units,
+
+          level
+
+        };
+
+      }
+      catch(error){
+
+        console.warn(
+
+          code,
+
+          level,
+
+          error
+
+        );
+
+      }
+
+    }
+
+
+    throw new Error(
+      "Nessuna suddivisione disponibile"
+    );
+
+  }
+
+
+  /* ============================
+     DISEGNA PAESE
+  ============================ */
+
+  function renderCountry(){
+
+    svg
+      .selectAll("*")
+      .remove();
+
+
+    svg.attr(
+      "viewBox",
+      "0 0 900 760"
+    );
+
+
+    const projection =
+
+      d3
+      .geoMercator()
+
+      .fitExtent(
+
+        [
+          [45,35],
+          [855,725]
+        ],
+
+        currentGeo
+
+      );
+
+
+    const path =
+      d3.geoPath(
+        projection
+      );
+
+
+    const layer =
+      svg.append("g");
+
+
+    setupZoom(
+
+      layer,
+
+      900,
+
+      760,
+
+      14
+
+    );
+
+
+    const record =
+      countryRecord(
+
+        currentCountry.code,
+
+        currentCountry.name
+
+      );
+
+
+    layer
+      .selectAll("path")
+
+      .data(
+        currentUnits
+      )
+
+      .join("path")
+
+      .attr(
+        "d",
+        unit =>
+          path(
+            unit.feature
+          )
+      )
+
+      .attr(
+        "class",
+        "unit"
+      )
+
+      .style(
+        "fill",
+        unit =>
+
+          record
+          .visited
+          .includes(
+            unit.key
+          )
+
+          ?
+
+          "#d979a3"
+
+          :
+
+          "#f4e9ee"
+      )
+
+      .on(
+        "click",
+        (
+          event,
+          unit
+        ) => {
+
+          if(
+            event.defaultPrevented
+          ){
+
+            return;
+
+          }
+
+
+          toggleUnit(
+
+            unit.key,
+
+            unit.name
+
+          );
+
+        }
+      );
+
+
+    /* NOMI AREE PIÙ GRANDI */
+
+    const labels =
+
+      [
+        ...currentUnits
+      ]
+
       .sort(
-        (a, b) =>
+        (
+          a,
+          b
+        ) =>
+
           d3.geoArea(
             b.feature
-          ) -
+          )
+
+          -
+
           d3.geoArea(
             a.feature
           )
       )
+
       .slice(
         0,
         Math.min(
@@ -973,171 +2483,568 @@ function renderCountry() {
         )
       );
 
-  layer
-    .selectAll("text")
-    .data(labels)
-    .join("text")
-    .attr(
-      "class",
-      "label"
-    )
-    .attr(
-      "transform",
-      unit => {
-        const center =
-          path.centroid(
-            unit.feature
+
+    layer
+      .selectAll("text")
+
+      .data(
+        labels
+      )
+
+      .join("text")
+
+      .attr(
+        "class",
+        "label"
+      )
+
+      .attr(
+        "transform",
+        unit => {
+
+          const center =
+            path.centroid(
+              unit.feature
+            );
+
+
+          return (
+            "translate("
+            +
+            center[0]
+            +
+            ","
+            +
+            center[1]
+            +
+            ")"
           );
 
-        return (
-          "translate(" +
-          center[0] +
-          "," +
-          center[1] +
-          ")"
-        );
-      }
-    )
-    .text(unit => {
-      if (
-        unit.name.length > 18
-      ) {
-        return (
-          unit.name.slice(
-            0,
-            16
-          ) + "…"
-        );
-      }
+        }
+      )
 
-      return unit.name;
-    });
+      .text(
+        unit => {
 
-  showMessage(
-    "Tocca un'area per segnarla come visitata 💗"
-  );
-}
+          return
 
-/* SEGNA AREA */
+            unit.name.length > 18
 
-function toggleUnit(key, name) {
-  const record =
-    countryRecord(
-      currentCountry.code,
-      currentCountry.name
-    );
+            ?
 
-  const index =
-    record.visited.indexOf(
-      key
-    );
+            unit.name.slice(
+              0,
+              16
+            )
+            +
+            "…"
 
-  if (index >= 0) {
-    record.visited.splice(
-      index,
-      1
-    );
+            :
+
+            unit.name;
+
+        }
+      );
+
 
     showMessage(
-      name +
-      " rimossa dai luoghi visitati."
-    );
-  } else {
-    record.visited.push(
-      key
+      "Tocca un'area per segnarla come visitata 💗"
     );
 
-    showMessage(
-      "✨ Hai visitato " +
-      name +
-      "!"
-    );
   }
 
-  saveState();
 
-  renderCountry();
-  renderUnitList();
-  updateCountryStats();
-}
+  /* ============================
+     LISTA AREE
+  ============================ */
 
-/* LISTA AREE */
+  function renderUnitList(){
 
-function renderUnitList() {
-  unitTitle.textContent =
-    "Aree di " +
-    currentCountry.name;
+    unitTitle.textContent =
+      "Aree di "
+      +
+      currentCountry.name;
 
-  unitList.innerHTML = "";
 
-  const record =
-    countryRecord(
-      currentCountry.code,
-      currentCountry.name
-    );
+    unitList.innerHTML =
+      "";
 
-  [...currentUnits]
+
+    const record =
+      countryRecord(
+
+        currentCountry.code,
+
+        currentCountry.name
+
+      );
+
+
+    [
+      ...currentUnits
+    ]
+
     .sort(
-      (a, b) =>
+      (
+        a,
+        b
+      ) =>
+
         a.name.localeCompare(
           b.name,
           "it"
         )
     )
-    .forEach(unit => {
-      const button =
-        document.createElement(
-          "button"
-        );
 
-      button.type =
-        "button";
+    .forEach(
+      unit => {
 
-      const selected =
-        record.visited.includes(
-          unit.key
-        );
-
-      button.className =
-        "unitBtn" +
-        (selected
-          ? " visited"
-          : "");
-
-      button.textContent =
-        (selected ? "✓ " : "") +
-        unit.name;
-
-      button.addEventListener(
-        "click",
-        () => {
-          toggleUnit(
-            unit.key,
-            unit.name
+        const button =
+          document.createElement(
+            "button"
           );
+
+
+        const selected =
+          record
+          .visited
+          .includes(
+            unit.key
+          );
+
+
+        button.type =
+          "button";
+
+
+        button.className =
+
+          "unitBtn"
+
+          +
+
+          (
+            selected
+            ?
+            " visited"
+            :
+            ""
+          );
+
+
+        button.textContent =
+
+          (
+            selected
+            ?
+            "✓ "
+            :
+            ""
+          )
+
+          +
+
+          unit.name;
+
+
+        button.addEventListener(
+          "click",
+          () => {
+
+            toggleUnit(
+
+              unit.key,
+
+              unit.name
+
+            );
+
+          }
+        );
+
+
+        unitList.appendChild(
+          button
+        );
+
+      }
+    );
+
+
+    unitPanel
+      .classList
+      .add(
+        "show"
+      );
+
+  }
+
+
+  /* ============================
+     COLORA AREA
+  ============================ */
+
+  function toggleUnit(
+    key,
+    name
+  ){
+
+    const record =
+      countryRecord(
+
+        currentCountry.code,
+
+        currentCountry.name
+
+      );
+
+
+    const index =
+      record
+      .visited
+      .indexOf(
+        key
+      );
+
+
+    if(
+      index >= 0
+    ){
+
+      record
+        .visited
+        .splice(
+          index,
+          1
+        );
+
+
+      showMessage(
+
+        name
+        +
+        " rimossa dai luoghi visitati."
+
+      );
+
+    }
+    else{
+
+      record
+        .visited
+        .push(
+          key
+        );
+
+
+      showMessage(
+
+        "✨ Hai visitato "
+        +
+        name
+        +
+        "!"
+
+      );
+
+    }
+
+
+    saveState();
+
+    renderCountry();
+
+    renderUnitList();
+
+    updateCountryStats();
+
+  }
+
+
+  /* ============================
+     TERRITORIO INTERO
+  ============================ */
+
+  function showWholeTerritory(
+    feature
+  ){
+
+    loading.style.display =
+      "none";
+
+
+    svg.style(
+      "display",
+      "block"
+    );
+
+
+    currentGeo = {
+
+      type:
+        "FeatureCollection",
+
+      features:
+        [
+          feature
+        ]
+
+    };
+
+
+    currentUnits =
+      [];
+
+
+    svg
+      .selectAll("*")
+      .remove();
+
+
+    svg.attr(
+      "viewBox",
+      "0 0 900 700"
+    );
+
+
+    const projection =
+
+      d3
+      .geoMercator()
+
+      .fitExtent(
+
+        [
+          [60,50],
+          [840,650]
+        ],
+
+        currentGeo
+
+      );
+
+
+    const path =
+      d3.geoPath(
+        projection
+      );
+
+
+    const layer =
+      svg.append("g");
+
+
+    setupZoom(
+
+      layer,
+
+      900,
+
+      700,
+
+      12
+
+    );
+
+
+    const selected =
+      Boolean(
+
+        state.wholeTerritories[
+          currentCountry.id
+        ]
+
+      );
+
+
+    layer
+      .append("path")
+
+      .datum(
+        feature
+      )
+
+      .attr(
+        "d",
+        path
+      )
+
+      .attr(
+        "class",
+        "unit"
+      )
+
+      .style(
+        "fill",
+        selected
+        ?
+        "#d979a3"
+        :
+        "#f4e9ee"
+      )
+
+      .on(
+        "click",
+        event => {
+
+          if(
+            event.defaultPrevented
+          ){
+
+            return;
+
+          }
+
+          toggleWholeTerritory();
+
         }
       );
 
-      unitList.appendChild(
-        button
+
+    unitPanel
+      .classList
+      .add(
+        "show"
       );
-    });
 
-  unitPanel.classList.add(
-    "show"
+
+    unitTitle.textContent =
+      currentCountry.name;
+
+
+    unitList.innerHTML =
+      "";
+
+
+    const button =
+      document.createElement(
+        "button"
+      );
+
+
+    button.type =
+      "button";
+
+
+    button.className =
+
+      "unitBtn"
+
+      +
+
+      (
+        selected
+        ?
+        " visited"
+        :
+        ""
+      );
+
+
+    button.textContent =
+
+      selected
+
+      ?
+
+      "✓ Segnato come visitato"
+
+      :
+
+      "Segna come visitato";
+
+
+    button.addEventListener(
+      "click",
+      toggleWholeTerritory
+    );
+
+
+    unitList.appendChild(
+      button
+    );
+
+
+    updateCountryStats();
+
+
+    showMessage(
+      "Per questo territorio puoi segnare l'intera area come visitata."
+    );
+
+  }
+
+
+  function toggleWholeTerritory(){
+
+    const id =
+      currentCountry.id;
+
+
+    if(
+      state.wholeTerritories[id]
+    ){
+
+      delete
+        state.wholeTerritories[id];
+
+
+      showMessage(
+
+        currentCountry.name
+        +
+        " rimosso dai luoghi visitati."
+
+      );
+
+    }
+    else{
+
+      state.wholeTerritories[id] =
+        true;
+
+
+      showMessage(
+
+        "✨ Hai visitato "
+        +
+        currentCountry.name
+        +
+        "!"
+
+      );
+
+    }
+
+
+    saveState();
+
+
+    showWholeTerritory(
+      currentCountry.feature
+    );
+
+  }
+
+
+  /* ============================
+     TORNA AL MONDO
+  ============================ */
+
+  backBtn.addEventListener(
+    "click",
+    loadWorld
   );
-}
 
-/* INDIETRO */
 
-backBtn.addEventListener(
-  "click",
-  loadWorld
-);
+  /* ============================
+     AVVIO
+  ============================ */
 
-/* AVVIO */
-
-loadWorld();
+  loadWorld();
 
 })();
 </script>
+
+</body>
+</html>
